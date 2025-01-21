@@ -1,10 +1,5 @@
 # finetuning_esm2_public
 Setting up generalizable repository to finetune esm2 models
-
-# RLXF_Projects
-
-Adapting RLHF for the generation of proteins with targeted improvements in fitness.
-
 ---
 
 #### Create SSH key in Setting on GitHub
