@@ -67,8 +67,8 @@ print(f"Using dataset from {data_filepath} with datasplit from {datasplits_filep
 
 # Choose label strategy
 if 'CreiLOV' in data_filepath:
-    labels_to_predict = 'log_mean'  # Define specific reg_target_labels for CreiLOV if needed
-    print(f"Regressing {labels_to_predict}")
+    reg_target_labels = ['log_mean']  # Define specific reg_target_labels for CreiLOV if needed
+    print(f"Regressing {reg_target_labels}")
 else:
     # Define reg_target_labels to use
     reg_target_labels = [
