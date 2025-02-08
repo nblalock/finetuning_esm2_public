@@ -44,18 +44,21 @@ class SeqFcnDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if self.token_format == 'aa2ind':
-            sequence = torch.tensor(aa2ind(list(self.data_df.Sequence.iloc[idx])), device=self.device) # Extract sequence at index idx
+            sequence = torch.tensor(aa2ind(list(self.data_df.sequence.iloc[idx])), device=self.device) # Extract sequence at index idx
         elif self.token_format == 'ESM2':
-            sequence = self.data_df.Sequence.iloc[idx]  # Directly get the sequence string for ESM2 tokenizer
+            sequence = self.data_df.sequence.iloc[idx]  # Directly get the sequence string for ESM2 tokenizer
 
         # Extract regression and ordinal labels
         reg_labels = torch.tensor(
             self.data_df.iloc[idx, self.regression_label_indices].tolist(),device=self.device).float()
 
-        ordinal_labels = torch.tensor(
-            self.data_df.iloc[idx, self.ordinal_label_indices].tolist(), device=self.device).long()
-
-        return sequence, reg_labels, ordinal_labels
+        if self.ordinal_label_indices is not None:
+            ordinal_labels = torch.tensor(
+                self.data_df.iloc[idx, self.ordinal_label_indices].tolist(), device=self.device).long()
+            return sequence, reg_labels, ordinal_labels
+        else:
+            return sequence, reg_labels
+        
 
     def __len__(self):
         return len(self.data_df)
@@ -64,7 +67,7 @@ class SeqFcnDataset(torch.utils.data.Dataset):
 class ProtDataModule(pl.LightningDataModule):
     """A PyTorch Lightning Data Module to handle data splitting"""
 
-    def __init__(self, data_frame, regression_label_indices, ordinal_label_indices, batch_size, splits_path=None, token_format='ESM2', seed=0):
+    def __init__(self, data_frame, regression_label_indices, ordinal_label_indices, batch_size, splits_path=None, splits_type=None, token_format='ESM2', seed=0):
         # Call the __init__ method of the parent class
         super().__init__()
 
@@ -77,7 +80,7 @@ class ProtDataModule(pl.LightningDataModule):
         self.seed = seed
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        if splits_path is not None:
+        if splits_type=="file":
             train_indices, val_indices, test_indices = self.load_splits(splits_path)
             # print(test_indices)
             
@@ -91,7 +94,7 @@ class ProtDataModule(pl.LightningDataModule):
             self.val_idx = val_indices
             self.test_idx = test_indices
                 
-        else:
+        elif splits_type=="cluster":
             # Initialize empty lists to hold the indices for the training, validation, and test sets
             train_indices = []
             val_indices = []
@@ -130,171 +133,18 @@ class ProtDataModule(pl.LightningDataModule):
             print("Training set size:", len(self.train_idx))
             print("Validation set size:", len(self.val_idx))
             print("Test set size:", len(self.test_idx))
-
-    # Assigns train, validation and test datasets for use in dataloaders.
-    def setup(self, stage=None):
-        
-        # Assign train/validation datasets for use in dataloaders
-        if stage == 'fit' or stage is None:
-            train_data_frame = self.data_df.iloc[list(self.train_idx)]
-            self.train_ds = SeqFcnDataset(train_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
-            val_data_frame = self.data_df.iloc[list(self.val_idx)]
-            self.val_ds = SeqFcnDataset(val_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
-                    
-        # Assigns test dataset for use in dataloader
-        if stage == 'test' or stage is None:
-            test_data_frame = self.data_df.iloc[list(self.test_idx)]
-            self.test_ds = SeqFcnDataset(test_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
-
-    def seed_worker(worker_id, worker_info):
-	    worker_seed = torch.initial_seed() % 2**32  # Compute a seed for the worker based on the initial seed of the torch Generator
-	    np.random.seed(worker_seed)  # Set NumPy's random seed based on the worker seed
-	    random.seed(worker_seed)  # Set Python's built-in random module's seed
-            
-    #The DataLoader object is created using the train_ds/val_ds/test_ds objects with the batch size set during initialization of the class and shuffle=True.
-    def train_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.train_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            print('Sending data to CPU')
-            return data_utils.DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True)
-    
-    
-    def val_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            # print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.val_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            # print('Sending data to CPU')
-            return data_utils.DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=True)
-    
-    
-    def test_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            # print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.test_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            # print('Sending data to CPU')
-            return data_utils.DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=True)
-    
-    def save_splits(self, path):
-        """Save the data splits to a file at the given path"""
-        with open(path, 'wb') as f:
-            pickle.dump((self.train_idx, self.val_idx, self.test_idx), f)
-
-    def load_splits(self, path):
-        """Load the data splits from a file at the given path"""
-        with open(path, 'rb') as f:
-            self.train_idx, self.val_idx, self.test_idx = pickle.load(f)
-            
-            train_indices = self.train_idx
-            val_indices = self.val_idx
-            test_indices = self.test_idx
-            
-        return train_indices, val_indices, test_indices
-    
-
-
-class GB1FcnDataset(torch.utils.data.Dataset):
-    """A custom PyTorch dataset for protein sequence-function data"""
-
-    def __init__(self, data_frame, token_format='aa2ind'):
-        self.data_df = data_frame
-        self.token_format = token_format
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(self.device)
-
-    def __getitem__(self, idx):
-        if self.token_format == 'aa2ind':
-            sequence = torch.tensor(aa2ind(list(self.data_df.Sequence.iloc[idx])),device=self.device) # Extract sequence at index idx
-        elif self.token_format == 'ESM2':
-            sequence = self.data_df.Sequence.iloc[idx]  # Directly get the sequence string for ESM2 tokenizer
-
-        # I convert all labels, including -1 values, to torch tensors
-        reg_labels = torch.tensor(self.data_df.score.iloc[idx].tolist(), device=self.device).float() # Extract labels for sequence at index idx and convert to a list
-        
-        return sequence, reg_labels
-
-    def __len__(self):
-        return len(self.data_df)
-
-# ProtDataModule splits the data into three different datasets.
-class GB1DataModule(pl.LightningDataModule):
-    """A PyTorch Lightning Data Module to handle data splitting"""
-
-    def __init__(self, data_frame, batch_size, splits_path=None, token_format='aa2ind', seed=0):
-        # Call the __init__ method of the parent class
-        super().__init__()
-
-        # Store the batch size
-        self.batch_size = batch_size
-        self.data_df = data_frame
-        self.token_format = token_format
-        self.seed = seed
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        if splits_path is not None:
-            train_indices, val_indices, test_indices = self.load_splits(splits_path)
-            # print(test_indices)
-            
-            # Shuffle the indices to ensure that the data from each cluster is mixed. Do I want this?
-            random.shuffle(train_indices)
-            random.shuffle(val_indices)
-            random.shuffle(test_indices)
-            
-            # Store the indices for the training, validation, and test sets
-            self.train_idx = train_indices
-            self.val_idx = val_indices
-            self.test_idx = test_indices
-                
-        else:
+        elif splits_type=="num_mutations":
             self.train_idx, self.val_idx, self.test_idx = self.mutations_split()
             
             # Verification
             print("Training set size:", len(self.train_idx))
             print("Validation set size:", len(self.val_idx))
             print("Test set size:", len(self.test_idx))
-
+    
+        else:
+            raise ValueError("Invalid splits_type")
+        
+        
     def mutations_split(self):
         """Split data while preserving `num_mutations` distribution."""
         train_indices, val_indices, test_indices = [], [], []
@@ -302,8 +152,9 @@ class GB1DataModule(pl.LightningDataModule):
         grouped = self.data_df.groupby("num_mutations")
         
         for _, group in grouped:
-            # Fraction of the data because GB1 is huge
+            #sampled_group = group
             sampled_group = group.sample(frac=0.1, random_state=self.seed)
+            
             indices = sampled_group.index.tolist()
             
             # Split: 80% Train, 10% Validation, 10% Test
@@ -322,14 +173,14 @@ class GB1DataModule(pl.LightningDataModule):
         # Assign train/validation datasets for use in dataloaders
         if stage == 'fit' or stage is None:
             train_data_frame = self.data_df.iloc[list(self.train_idx)]
-            self.train_ds = GB1FcnDataset(train_data_frame, self.token_format)
+            self.train_ds = SeqFcnDataset(train_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
             val_data_frame = self.data_df.iloc[list(self.val_idx)]
-            self.val_ds = GB1FcnDataset(val_data_frame, self.token_format)
+            self.val_ds = SeqFcnDataset(val_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
                     
         # Assigns test dataset for use in dataloader
         if stage == 'test' or stage is None:
             test_data_frame = self.data_df.iloc[list(self.test_idx)]
-            self.test_ds = GB1FcnDataset(test_data_frame, self.token_format)
+            self.test_ds = SeqFcnDataset(test_data_frame, self.regression_label_indices, self.ordinal_label_indices, self.token_format)
 
     def seed_worker(worker_id, worker_info):
         worker_seed = torch.initial_seed() % 2**32  # Compute a seed for the worker based on the initial seed of the torch Generator
@@ -417,8 +268,6 @@ class GB1DataModule(pl.LightningDataModule):
             test_indices = self.test_idx
             
         return train_indices, val_indices, test_indices
-
-
 
 
 
@@ -597,7 +446,9 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             tokens = tokens.to(self.device)
         reg_logits, ord_logits = self(tokens)
 
-        # Regression Loss
+        reg_labels = reg_labels.squeeze()
+
+        # Regression Losss
         if self.reg_type == 'mse':
             if self.num_reg_tasks > 0:
                 reg_mask = (reg_labels != -1).float()  # Mask for valid labels
@@ -605,7 +456,6 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 reg_loss = reg_loss * self.reg_weights.unsqueeze(0)  # Broadcast weights
                 reg_loss = reg_loss * reg_mask  # Apply mask
                 reg_observations = torch.sum(reg_mask)  # Number of valid labels
-                print(reg_labels)
                 reg_loss = torch.div(torch.sum(torch.nan_to_num(reg_loss, nan=0.0, posinf=0.0, neginf=0.0)), reg_observations) # computes the average loss over the observed labels, ignoring any invalid labels
                 # The torch.nan_to_num() function replaces NaN, positive infinity, and negative infinity values in the loss tensor with 0.0
                 # The torch.sum() function sums the resulting tensor
@@ -677,6 +527,8 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
         if torch.cuda.is_available():
             tokens = tokens.to(self.device)
         reg_logits, ord_logits = self(tokens)
+
+        reg_labels = reg_labels.squeeze()
 
         # Regression Loss
         if self.reg_type == 'mse':
@@ -881,191 +733,4 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
 	            print(f"An error occurred while saving the EMA model: {e}")
 	        finally:
 	        	self.ema.to('cpu')
-
-# CreiLOVFcnDataset is a data handling class.
-class CreiLOVFcnDataset(torch.utils.data.Dataset):
-    """A custom PyTorch dataset for protein sequence-function data"""
-
-    def __init__(self, data_frame, token_format='aa2ind'):
-        self.data_df = data_frame
-        self.token_format = token_format
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(self.device)
-
-    def __getitem__(self, idx):
-        if self.token_format == 'aa2ind':
-            sequence = torch.tensor(aa2ind(list(self.data_df.Sequence.iloc[idx])),device=self.device) # Extract sequence at index idx
-        elif self.token_format == 'ESM2':
-            sequence = self.data_df.Sequence.iloc[idx]  # Directly get the sequence string for ESM2 tokenizer
-
-        # I convert all labels, including -1 values, to torch tensors
-        reg_labels = torch.tensor(self.data_df.log_mean.iloc[idx].tolist(), device=self.device).float() # Extract labels for sequence at index idx and convert to a list
-        
-        return sequence, reg_labels
-
-    def __len__(self):
-        return len(self.data_df)
-
-# ProtDataModule splits the data into three different datasets.
-class CreiLOVDataModule(pl.LightningDataModule):
-    """A PyTorch Lightning Data Module to handle data splitting"""
-
-    def __init__(self, data_frame, batch_size, splits_path=None, token_format='aa2ind', seed=0):
-        # Call the __init__ method of the parent class
-        super().__init__()
-
-        # Store the batch size
-        self.batch_size = batch_size
-        self.data_df = data_frame
-        self.token_format = token_format
-        self.seed = seed
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        if splits_path is not None:
-            train_indices, val_indices, test_indices = self.load_splits(splits_path)
-            # print(test_indices)
-            
-            # Shuffle the indices to ensure that the data from each cluster is mixed. Do I want this?
-            random.shuffle(train_indices)
-            random.shuffle(val_indices)
-            random.shuffle(test_indices)
-            
-            # Store the indices for the training, validation, and test sets
-            self.train_idx = train_indices
-            self.val_idx = val_indices
-            self.test_idx = test_indices
-                
-        else:
-            # Calculate split sizes
-            total_samples = len(self.data_df)
-            train_size = int(0.8 * total_samples)
-            val_size = int(0.1 * total_samples)
-            test_size = total_samples - train_size - val_size
-            
-            # Shuffle the DataFrame to ensure randomness
-            shuffled_df = self.data_df.sample(frac=1, random_state=5).reset_index(drop=True)
-            
-            # Split the indices for training, validation, and testing
-            train_indices = list(shuffled_df.index[:train_size])
-            val_indices = list(shuffled_df.index[train_size:train_size + val_size])
-            test_indices = list(shuffled_df.index[train_size + val_size:])
-            
-            # Store the indices for the training, validation, and test sets
-            self.train_idx = train_indices
-            self.val_idx = val_indices
-            self.test_idx = test_indices
-            
-            # Verification
-            print("Training set size:", len(self.train_idx))
-            print("Validation set size:", len(self.val_idx))
-            print("Test set size:", len(self.test_idx))
-
-    # Assigns train, validation and test datasets for use in dataloaders.
-    def setup(self, stage=None):
-        
-        # Assign train/validation datasets for use in dataloaders
-        if stage == 'fit' or stage is None:
-            train_data_frame = self.data_df.iloc[list(self.train_idx)]
-            self.train_ds = CreiLOVFcnDataset(train_data_frame, self.token_format)
-            val_data_frame = self.data_df.iloc[list(self.val_idx)]
-            self.val_ds = CreiLOVFcnDataset(val_data_frame, self.token_format)
-                    
-        # Assigns test dataset for use in dataloader
-        if stage == 'test' or stage is None:
-            test_data_frame = self.data_df.iloc[list(self.test_idx)]
-            self.test_ds = CreiLOVFcnDataset(test_data_frame, self.token_format)
-
-    def seed_worker(worker_id, worker_info):
-        worker_seed = torch.initial_seed() % 2**32  # Compute a seed for the worker based on the initial seed of the torch Generator
-        np.random.seed(worker_seed)  # Set NumPy's random seed based on the worker seed
-        random.seed(worker_seed)  # Set Python's built-in random module's seed
-            
-    #The DataLoader object is created using the train_ds/val_ds/test_ds objects with the batch size set during initialization of the class and shuffle=True.
-    def train_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.train_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            print('Sending data to CPU')
-            return data_utils.DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True)
-    
-    
-    def val_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            # print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.val_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            # print('Sending data to CPU')
-            return data_utils.DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=True)
-    
-    
-    def test_dataloader(self):
-        # Determine if we're running on a GPU
-        is_cuda = torch.cuda.is_available()
-        if is_cuda:
-            generator = torch.Generator()  # Create a new torch Generator
-            generator.manual_seed(self.seed)  # Manually seed the generator with the predefined seed from the class
-            # Create and return a DataLoader configured for training
-            # print('Sending data to GPU')
-            return data_utils.DataLoader(
-                self.test_ds,  # The dataset to load, in this case, the training dataset
-                batch_size=self.batch_size,  # The number of samples in each batch to load
-                shuffle=True,  # Enable shuffling to randomize the order of data before each epoch
-                worker_init_fn=self.seed_worker,  # Function to initialize each worker's seed to ensure reproducibility across runs
-                generator=generator,  # Specify the generator used for random number generation in shuffling
-                # num_workers=32,  # The number of subprocesses to use for data loading. More workers can increase the speed of data loading
-                # pin_memory=True  # Pins memory, allowing faster and more efficient transfer of data from host to GPU when training on GPUs
-            )
-        else:
-            # print('Sending data to CPU')
-            return data_utils.DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=True)
-    
-    def save_splits(self, path):
-        """Save the data splits to a file at the given path"""
-        with open(path, 'wb') as f:
-            pickle.dump((self.train_idx, self.val_idx, self.test_idx), f)
-
-    def load_splits(self, path):
-        """Load the data splits from a file at the given path"""
-        with open(path, 'rb') as f:
-            self.train_idx, self.val_idx, self.test_idx = pickle.load(f)
-            
-            train_indices = self.train_idx
-            val_indices = self.val_idx
-            test_indices = self.test_idx
-            
-        return train_indices, val_indices, test_indices
-
-
-
-
-
-
-
 
