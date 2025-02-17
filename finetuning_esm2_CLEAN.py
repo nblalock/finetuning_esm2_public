@@ -45,6 +45,19 @@ from ESM2_w_regression_MLP_heads_CLEAN import (SeqFcnDataset, ProtDataModule, fi
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 
+# In[]
+# Data parameters
+
+data_filepath = 'gb1.tsv' # ! Change this
+df = pd.read_csv(data_filepath, sep='\t')
+WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
+splits_path = None # include if splits stored in a file, else None
+splits_type = "num_mutations" # either "file", "num_mutations", or "cluster"
+
+
+
+
+
 # In[3]
 
 """
@@ -52,20 +65,108 @@ Use this cell to import and pre-process your dataset. Following functions assume
 
 """
 
+def mutate(np_mutations: list):
+    # 'np_mutations' = list of mutations)
+    
+    list_updated = []
+    count = 0
+    
+    # Iterates over each element of the input array 'np_mutations'
+    for i in range(len(np_mutations)):
+        
+        # splits the element by ',' (comma) to get the individual mutations.
+        try: 
+            muts = np_mutations[i].split(',')
+        except:
+            muts = np_mutations[i]
+            
+        # Go through each mutation (there are one or two)
+        
+       # Creates a copy of the original wild type sequence 'WT_list'
+        mut_list = list(WT)
+        
+        # Iterates over each mutation
+        for mut in muts:
+            
+            # nblalock edit: codes extracts the final index and final amino acid from the mutation string
+            # The code uses slicing and indexing to extract the information regardless of its length
+            final_index = int(mut[1:-1]) - 1
+            final_AA = mut[-1]
+
+            # Replaces the amino acid of the wild type sequence with the mutated amino acid
+            mut_list[final_index] = final_AA
+        
+        # Append mutated sequence and score
+        list_updated.append(mut_list)
+    
+    # Returns the list of updated sequences with mutations
+    return list_updated
+
+
+# Fix indexing in variant/mutation entries. This is only necessary if there are issues with 0 v 1 based indexing
+def convert_indexing(variants, offset: int):
+    """ convert between 0-indexed and 1-indexed """
+    #'variants' = an array of strings representing variants/mutations)
+    # offset = integer
+    
+    converted = [",".join(["{}{}{}".format(mut[0], int(mut[1:-1]) + offset, mut[-1]) for mut in v.split(",")])
+                 for v in variants]
+    # Iterates over each element of the input array 'variants' and for each element
+    # Splits the element by ',' (comma) to get the individual mutations
+    # Uses list comprehension with "join" method to join the mutated elements with a comma,
+    # List comprehension iterates over the individual mutations and for each mutation
+    # The first character of the mutation is taken by mut[0]
+    # Index value is taken by mut[1:-1] and it converts it to an integer, then it adds the offset value to it
+    # the last character of the mutation is taken by mut[-1]
+    # Formats it into a string "{}{}{}"
+    # First {} will be replaced by the first character of the mutation
+    # Second {} will be replaced by the modified index value
+    # Third {} will be replaced by the last character of the mutation.
+    
+    return converted
+# The final list comprehension will have a list of modified mutations with the updated indexing,
+# then it joins each element of the list using ','(comma) and returns the final list of converted variants/mutations.
+
+
 # Choose dataset
-data_filepath = 'dataset_df_for_subset_0thru1_CreiLOV_mutants.pkl' # ! Change this
-datasplits_filepath = f'{data_filepath}_splits.pkl'
-# dataset_df_for_0thru5_CreiLOV_mutants.pkl # dataset_df_for_subset_0thru1_CreiLOV_mutants.pkl # normalized_procesed_ADA2_R1_dataset.pkl
 
-# load datasets
-df = pd.read_pickle(f"./{data_filepath}").reset_index(drop=True) # load preprocesed CreiLOV data
-df = df.fillna(-1) # Fill NaN values with -1, I will mask these values later
-# df.head()
-# df.columns
+# Sets the number of threads that PyTorch will use for parallel computation.
+torch.set_num_threads(4) 
 
-print(f"Using dataset from {data_filepath} with datasplit from {datasplits_filepath}")
+# The following loads + preprocesses experimentally collected data (fitness scores for gb1 mutants in this example)
+data_filepath = 'gb1.tsv' # ! Change this
+df = pd.read_csv(data_filepath, sep='\t')
+WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
 
-df = df.rename(columns={"log_mean" : "score", "Sequence" : "sequence"})
+# print(df) # shows thermostability data
+
+################################################ May not be necessary ################################################
+df.variant = convert_indexing(df.variant,1)    
+# print(df) # increases a.a. position by 1
+################################################ May not be necessary ################################################
+
+AA_seq_lists = mutate(list(df['variant'].copy()))
+
+AA_seq_lists2 = [str("".join(AA_seq_lists[j])) for j in range(len(AA_seq_lists))]
+
+# Add column of full amino acid sequences.
+df['Sequence'] = AA_seq_lists2
+
+print(f"Using dataset from {data_filepath}")
+
+df = df.rename(columns={ "Sequence" : "sequence"})
+df['class'] = df['score'].apply(lambda x: 0 if x < 0 else 1) # 0 = "dead", 1 = "functional"
+
+# Plot histogram
+plt.figure(figsize=(10, 6))
+plt.hist(df['score'], bins=50, edgecolor='black', alpha=0.7)
+plt.xlabel('Score')
+plt.ylabel('Frequency')
+plt.title('Histogram of Scores')
+plt.grid(axis='y', alpha=0.75)
+
+# Show plot
+plt.show()
 
 
 # In[4]:
@@ -97,32 +198,13 @@ ordinal_reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for r
 # Determine the number of unique variables for ordinal regression labels
 ordinal_reg_target_nunique = [df[label].nunique() for label in ordinal_reg_target_labels if label in df.columns]
 
-labels_to_predict = 'multitask_ADA2_data'  # Use all target reg_target_labels for prediction
+
 print(f"Regressing {reg_target_labels} at indices {reg_target_labels_indices}")
 print(f"Classifying {ordinal_reg_target_labels} at indices {ordinal_reg_target_labels_indices}")
 print(f"Number of unique variables in ordinal regression labels: {ordinal_reg_target_nunique}")
 
 
-# In[5]:
-
-
-# Set up Amino Acid Dictionary of Indices
-AAs = 'ACDEFGHIKLMNPQRSTVWY-' # setup torchtext vocab to map AAs to indices
-if 'gb1' in data_filepath:
-    WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
-elif 'CreiLOV' in data_filepath:
-    WT = 'MAGLRHTFVVADATLPDCPLVYASEGFYAMTGYGPDEVLGHNARFLQGEGTDPKEVQKIRDAIKKGEACSVRLLNYRKDGTPFWNLLTVTPIKTPDGRVSKFVGVQVDVTSKTEGKALA' # CreiLOV
-else:
-    # ! update
-    WT = "IDETRAHLLLKEKMMRLGGRLVLNTKEELANERLMTLKIAEMKEAMRTLIFPPSMHFFQAKHLIERSQVFNILRMMPKGAALHLHDIGIVTMDWLVRNVTYRPHCHICFTPRGIMQFRFAHPTPRPSEKCSKWILLEDYRKRVQNVTEFDDSLLRNFTLVTQHPEVIYTNQNVVWSKFETIFFTISGLIHYAPVFRDYVFRSMQEFYEDNVLYMEIRARLLPVYELSGEHHDEEWSVKTYQEVAQKFVETHPEFIGIKIIYSDHRSKDVAVIAESIRMAMGLRIKFPTVVAGFDLVGHEDTGHSLHDYKEALMIPAKDGVKLPYFFHAGETDWQGTSIDRNILDALMLNTTRIGHGFALSKHPAVRTYSWKKDIPIEVCPISNQVLKLVSDLRNHPVATLMATGHPMVISSDDPAMFGAKGLSYDFYEVFMGIGGMKADLRTLKQLAMNSIKYSTLLESEKNTFMEIWKKRWDKFIADVATK" # ! ADA2
-aa2ind = vocab.vocab(OrderedDict([(a, 1) for a in AAs]))
-aa2ind.set_default_index(20) # set unknown charcterers to gap
-ind2aa = {aa2ind[a]: a for a in AAs} # Create a reverse mapping for indices to amino acids
-
-
 # In[6]:
-
-
 ######################################## Hyperparameters that can be altered ########################################
 # ESM2 selection
 huggingface_identifier ='esm2_t6_8M_UR50D' # esm2_t6_8M_UR50D # esm2_t12_35M_UR50D # esm2_t30_150M_UR50D # esm2_t33_650M_UR50D
@@ -205,12 +287,9 @@ else:
 
 # In[7]:
 
+# Data Module
 
-# Training Models
-splits_path = datasplits_filepath # include if splits stored in a file, else None
-splits_type = "file" # either "file", "num_mutations", or "cluster"
-
-dm = ProtDataModule(df, reg_target_labels_indices, None, batch_size, splits_path, splits_type, token_format, seed)
+dm = ProtDataModule(df, reg_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, splits_path, splits_type, token_format, seed)
 
 
 # In[8]:

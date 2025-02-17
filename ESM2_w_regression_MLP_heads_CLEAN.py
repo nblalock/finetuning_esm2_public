@@ -401,7 +401,7 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
         outputs = self.ESM2_wo_lmhead(x, output_hidden_states=True, return_dict=True)
 
         last_hidden_states = outputs.hidden_states[-1]
-        # print(f"last_hidden_states shape: {last_hidden_states.shape}")
+        #print(f"last_hidden_states shape: {last_hidden_states.shape}")
         
         # Step 2: Extract the <CLS> token embedding from the last hidden layer (https://www.nature.com/articles/s41467-024-51844-2)
         if self.embedding_type == 'cls_token_only':
@@ -448,6 +448,7 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
 
         reg_labels = reg_labels.squeeze()
 
+
         # Regression Losss
         if self.reg_type == 'mse':
             if self.num_reg_tasks > 0:
@@ -461,6 +462,18 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 # The torch.sum() function sums the resulting tensor
                 # torch.div() divides the sum by the number of observed labels (reg_observations) to obtain the mean loss per label.
                 if reg_observations == 0.0:
+                    reg_loss = torch.tensor(0.0, device=self.device)
+            else:
+                reg_loss = torch.tensor(0.0, device=self.device)
+        elif self.reg_type == 'logistic':
+            if self.num_reg_tasks > 0:
+                reg_mask = (reg_labels != -1).float()  # Mask for valid labels
+                reg_loss = nn.CrossEntropyLoss()(reg_logits, reg_labels.long())
+                reg_loss = reg_loss * self.reg_weights.unsqueeze(0)  # Broadcast weights
+                reg_loss = reg_loss * reg_mask  # Apply mask
+                reg_observations = torch.sum(reg_mask)  # Number of valid labels
+                reg_loss = torch.div(torch.sum(torch.nan_to_num(reg_loss, nan=0.0, posinf=0.0, neginf=0.0)), reg_observations)
+            if reg_observations == 0.0:
                     reg_loss = torch.tensor(0.0, device=self.device)
             else:
                 reg_loss = torch.tensor(0.0, device=self.device)
@@ -543,6 +556,18 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 # The torch.sum() function sums the resulting tensor
                 # torch.div() divides the sum by the number of observed labels (reg_observations) to obtain the mean loss per label.
                 if reg_observations == 0.0:
+                    reg_loss = torch.tensor(0.0, device=self.device)
+            else:
+                reg_loss = torch.tensor(0.0, device=self.device)
+        elif self.reg_type == 'logistic':
+            if self.num_reg_tasks > 0:
+                reg_mask = (reg_labels != -1).float()  # Mask for valid labels
+                reg_loss = nn.CrossEntropyLoss(reduction="none")(reg_logits, reg_labels.long())
+                reg_loss = reg_loss * self.reg_weights.unsqueeze(0)  # Broadcast weights
+                reg_loss = reg_loss * reg_mask  # Apply mask
+                reg_observations = torch.sum(reg_mask)  # Number of valid labels
+                reg_loss = torch.div(torch.sum(torch.nan_to_num(reg_loss, nan=0.0, posinf=0.0, neginf=0.0)), reg_observations)
+            if reg_observations == 0.0:
                     reg_loss = torch.tensor(0.0, device=self.device)
             else:
                 reg_loss = torch.tensor(0.0, device=self.device)
