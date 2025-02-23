@@ -54,10 +54,6 @@ WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
 splits_path = None # include if splits stored in a file, else None
 splits_type = "num_mutations" # either "file", "num_mutations", or "cluster"
 
-
-
-
-
 # In[3]
 
 """
@@ -187,20 +183,31 @@ reg_target_labels = [
     # 'Mean Fold Change'
     ] # ! update
 
+log_target_labels = [
+    "class"
+] # ! update
+
 ordinal_reg_target_labels = [
     # 'aSEC Retention Time (Main Peak)',
     ] # ! update
 
 # Dynamically find reg_target_labels indices
 reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in reg_target_labels if reg_target_labels in df.columns]
+
+log_target_labels_indices = [df.columns.get_loc(log_target_labels) for log_target_labels in log_target_labels if log_target_labels in df.columns]
+
 ordinal_reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in ordinal_reg_target_labels if reg_target_labels in df.columns]
+
+# Determine the number of logistic classes per label
+num_log_classes = [df[label].nunique() for label in log_target_labels if label in df.columns]
 
 # Determine the number of unique variables for ordinal regression labels
 ordinal_reg_target_nunique = [df[label].nunique() for label in ordinal_reg_target_labels if label in df.columns]
 
 
 print(f"Regressing {reg_target_labels} at indices {reg_target_labels_indices}")
-print(f"Classifying {ordinal_reg_target_labels} at indices {ordinal_reg_target_labels_indices}")
+print(f"Classifying {log_target_labels} at indices {log_target_labels_indices}")
+print(f"Ordinally regressing {ordinal_reg_target_labels} at indices {ordinal_reg_target_labels_indices}")
 print(f"Number of unique variables in ordinal regression labels: {ordinal_reg_target_nunique}")
 
 
@@ -251,7 +258,8 @@ else:
 slen = len(WT) # length of protein
 num_reg_tasks = 1 # len(reg_target_labels)
 reg_weights = [1] # ! update
-reg_type = 'mse'
+num_log_tasks = len(log_target_labels)
+reg_type = ['mse'] # ["mse", "log", "ord"] include any of the 3 based on task
 num_ord_reg_tasks = 0 # len(ordinal_reg_target_labels)
 ord_reg_weights = [] # ! update
 ord_reg_type = "corn_loss"
@@ -289,7 +297,7 @@ else:
 
 # Data Module
 
-dm = ProtDataModule(df, reg_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, splits_path, splits_type, token_format, seed)
+dm = ProtDataModule(df, reg_target_labels_indices, log_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, splits_path, splits_type, token_format, seed)
 
 
 # In[8]:
@@ -298,7 +306,7 @@ model = finetuning_ESM2_with_mse_loss(ESM2, huggingface_identifier, tokenizer, n
                  epochs, batch_size, seed, embedding_type, patience,
                  learning_rate, lr_mult, lr_mult_factor,
                  WD, reinit_optimizer, grad_clip_threshold, use_scheduler, warm_restart,
-                 slen, num_reg_tasks, reg_weights, reg_type, num_ord_reg_tasks, ord_reg_weights, None, ordinal_reg_target_nunique,
+                 slen, num_reg_tasks, num_log_classes, num_log_tasks, reg_weights, reg_type, num_ord_reg_tasks, ord_reg_weights, None, ordinal_reg_target_nunique,
                  using_EMA, decay,
                  epoch_threshold_to_unlock_ESM2,
                  WT,
