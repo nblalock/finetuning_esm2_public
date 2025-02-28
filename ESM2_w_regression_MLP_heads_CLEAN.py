@@ -52,13 +52,16 @@ class SeqFcnDataset(torch.utils.data.Dataset):
         # Extract regression and ordinal labels
         reg_labels = torch.tensor(
             self.data_df.iloc[idx, self.regression_label_indices].tolist(),device=self.device).float()
+        
+        log_labels = torch.tensor(
+            self.data_df.iloc[idx, self.log_label_indices].tolist(),device=self.device).long()
 
         if self.ordinal_label_indices is not None:
             ordinal_labels = torch.tensor(
                 self.data_df.iloc[idx, self.ordinal_label_indices].tolist(), device=self.device).long()
-            return sequence, reg_labels, ordinal_labels
+            return sequence, reg_labels, log_labels, ordinal_labels
         else:
-            return sequence, reg_labels
+            return sequence, reg_labels, log_labels
         
 
     def __len__(self):
@@ -155,7 +158,7 @@ class ProtDataModule(pl.LightningDataModule):
         
         for _, group in grouped:
             #sampled_group = group
-            sampled_group = group.sample(frac=0.1, random_state=self.seed)
+            sampled_group = group.sample(frac=0.02, random_state=self.seed)
             
             indices = sampled_group.index.tolist()
             
@@ -351,6 +354,8 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             ) for i in range(self.num_reg_tasks)
         ])
 
+        print(self.num_log_classes)
+        print(self.num_log_tasks)
         # Set up logistic MLPs
         self.log_regression_mlps = nn.ModuleList([
             nn.Sequential(
@@ -456,10 +461,12 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # Load data and generate logits
-        if len(batch)==2:
-            sequence, reg_labels = batch
+        if len(batch)==3:
+            sequence, reg_labels, log_labels = batch
         else:
-            sequence, reg_labels, ordinal_labels = batch
+            sequence, reg_labels, log_labels, ordinal_labels = batch
+
+        
 
         tokens = self.tokenizer(sequence, return_tensors='pt', padding=True).input_ids.to(self.device) # Convert sequence to tokens for ESM2
         if torch.cuda.is_available():
@@ -467,7 +474,9 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
         reg_logits, log_logits, ord_logits = self(tokens)
 
         reg_labels = reg_labels.squeeze()
-        log_labels = reg_labels
+        log_labels = log_labels.squeeze()
+        
+        
 
 
         # Regression Losss
@@ -494,14 +503,14 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             if self.num_reg_tasks > 0:
                 log_mask = (log_labels != -1).float()  # Mask for valid labels
                 log_loss = nn.CrossEntropyLoss()(log_logits, log_labels.long())
-                log_loss = log_loss * self.reg_weights.unsqueeze(0)  # Broadcast weights
+                
                 log_loss = log_loss * log_mask  # Apply mask
+                
                 log_observations = torch.sum(log_mask)  # Number of valid labels
                 log_loss = torch.div(torch.sum(torch.nan_to_num(log_loss, nan=0.0, posinf=0.0, neginf=0.0)), log_observations)
+                log_loss /= self.num_log_classes
             if log_observations == 0.0:
                     log_loss = torch.tensor(0.0, device=self.device)
-            else:
-                log_loss = torch.tensor(0.0, device=self.device)
         
         # Ordinal Regression Loss
         ord_loss = torch.tensor(0.0, device=self.device)
@@ -538,16 +547,19 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             
             total_loss = reg_loss + ord_loss
         
-        total_loss = reg_loss + ord_loss + log_loss
+        total_loss = torch.tensor(0.0, device=self.device)
         if "mse" in self.reg_type:
+            total_loss += reg_loss
             self.log("train_reg_loss", reg_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
             self.train_reg_loss = reg_loss.item()
         if "log" in self.reg_type:
+            total_loss += log_loss
             self.log("train_log_loss", log_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports logistic loss
-            self.train_log_loss = reg_loss.item()
+            self.train_log_loss = log_loss.item()
         if "ord" in self.reg_type:
+            total_loss += ord_loss
             self.log("train_ord_loss", ord_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports ordinal loss
-            self.train_ord_loss = reg_loss.item()
+            self.train_ord_loss = ord_loss.item()
 
         # Backpropagation
         self.optimizer.zero_grad()
@@ -563,10 +575,12 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         # Load data and generate logits
-        if len(batch)==2:
-            sequence, reg_labels = batch
+        if len(batch)==3:
+            sequence, reg_labels, log_labels = batch
         else:
-            sequence, reg_labels, ordinal_labels = batch
+            sequence, reg_labels, log_labels, ordinal_labels = batch
+
+        
 
         tokens = self.tokenizer(sequence, return_tensors='pt', padding=True).input_ids.to(self.device) # Convert sequence to tokens for ESM2
         if torch.cuda.is_available():
@@ -574,7 +588,10 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
         reg_logits, log_logits, ord_logits = self(tokens)
 
         reg_labels = reg_labels.squeeze()
-        log_labels = reg_labels
+        log_labels = log_labels.squeeze()
+        
+        
+
 
         # Regression Losss
         reg_loss = torch.tensor(0.0, device=self.device)
@@ -600,14 +617,13 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             if self.num_reg_tasks > 0:
                 log_mask = (log_labels != -1).float()  # Mask for valid labels
                 log_loss = nn.CrossEntropyLoss()(log_logits, log_labels.long())
-                log_loss = log_loss * self.reg_weights.unsqueeze(0)  # Broadcast weights
+                
                 log_loss = log_loss * log_mask  # Apply mask
+                
                 log_observations = torch.sum(log_mask)  # Number of valid labels
                 log_loss = torch.div(torch.sum(torch.nan_to_num(log_loss, nan=0.0, posinf=0.0, neginf=0.0)), log_observations)
             if log_observations == 0.0:
                     log_loss = torch.tensor(0.0, device=self.device)
-            else:
-                log_loss = torch.tensor(0.0, device=self.device)
         
         # Ordinal Regression Loss
         ord_loss = torch.tensor(0.0, device=self.device)
@@ -637,23 +653,26 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
             else:
                 ord_loss = torch.tensor(0.0, device=self.device)
 
-            self.log("train_reg_loss", reg_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
-            self.log("train_ord_loss", ord_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
-            self.train_reg_loss = reg_loss.item()
-            self.train_ord_loss = ord_loss.item()
+            self.log("val_reg_loss", reg_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
+            self.log("val_ord_loss", ord_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
+            self.val_reg_loss = reg_loss.item()
+            self.val_ord_loss = ord_loss.item()
             
             total_loss = reg_loss + ord_loss
         
-        total_loss = reg_loss + ord_loss + log_loss
+        total_loss = torch.tensor(0.0, device=self.device)
         if "mse" in self.reg_type:
+            total_loss += reg_loss
             self.log("val_reg_loss", reg_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports MSE loss
             self.val_reg_loss = reg_loss.item()
         if "log" in self.reg_type:
+            total_loss += log_loss
             self.log("val_log_loss", log_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports logistic loss
-            self.val_log_loss = reg_loss.item()
+            self.val_log_loss = log_loss.item()
         if "ord" in self.reg_type:
+            total_loss += ord_loss
             self.log("val_ord_loss", ord_loss, prog_bar=True, logger=True, on_step = False, on_epoch=True) # reports ordinal loss
-            self.val_ord_loss = reg_loss.item()
+            self.val_ord_loss = ord_loss.item()
 
         return total_loss
 
@@ -705,7 +724,7 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 current_lr = self.learning_rate
                 
                 # Define the same learning rate for all FCNN layers
-                fcnn_layers = list(self.regression_mlps)
+                fcnn_layers = list(self.regression_mlps) + list(self.log_regression_mlps) + list(self.ordinal_regression_mlps)
                 for fcnn_layer in fcnn_layers:
                     # print(f"Adding FCNN layer {fcnn_layer} to optimizer with lr: {current_lr}")
                     self.esm2_params.append({'params': list(fcnn_layer.parameters()), 'lr': current_lr})

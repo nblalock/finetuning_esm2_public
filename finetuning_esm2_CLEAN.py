@@ -259,7 +259,7 @@ slen = len(WT) # length of protein
 num_reg_tasks = 1 # len(reg_target_labels)
 reg_weights = [1] # ! update
 num_log_tasks = len(log_target_labels)
-reg_type = ['mse'] # ["mse", "log", "ord"] include any of the 3 based on task
+reg_type = ["log"] # ["mse", "log", "ord"] include any of the 3 based on task
 num_ord_reg_tasks = 0 # len(ordinal_reg_target_labels)
 ord_reg_weights = [] # ! update
 ord_reg_type = "corn_loss"
@@ -296,7 +296,6 @@ else:
 # In[7]:
 
 # Data Module
-
 dm = ProtDataModule(df, reg_target_labels_indices, log_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, splits_path, splits_type, token_format, seed)
 
 
@@ -315,10 +314,10 @@ model = finetuning_ESM2_with_mse_loss(ESM2, huggingface_identifier, tokenizer, n
 checkpoint_callback = ModelCheckpoint(
         dirpath=f"./logs/{filepath}/",
         filename=f"{filepath}",
-        monitor="val_reg_loss",
+        monitor="val_log_loss",
         mode="min",
         save_top_k=1)
-early_stopping = EarlyStopping(monitor="val_reg_loss", patience=patience, mode="min")
+early_stopping = EarlyStopping(monitor="val_log_loss", patience=patience, mode="min")
 logger = CSVLogger('logs', name=f"{filepath}") # logger is a class instance that stores performance data to a csv after each epoch
 
 # Dynamically set up Trainer based on available device
@@ -341,8 +340,8 @@ trainer.fit(model, dm)
 
 
 # Save the model
-non_ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2_CreiLOV.pt'
-ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2__CreiLOV_w_EMA.pt'
+non_ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2_Log_Testing.pt'
+ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2__Log_Testing_w_EMA.pt'
 model.save_model(non_ema_path, ema_path)
 
 
@@ -362,10 +361,10 @@ try:
     pt_metrics = pd.read_csv(f'./logs/{filepath}/version_{version}/metrics.csv')
     
     # Extract training and validation losses
-    train = pt_metrics[~pt_metrics.train_reg_loss.isna()]
-    val = pt_metrics[~pt_metrics.val_reg_loss.isna()]
-    train_losses = train.train_reg_loss.values
-    val_losses = val.val_reg_loss.values
+    train = pt_metrics[~pt_metrics.train_log_loss.isna()]
+    val = pt_metrics[~pt_metrics.val_log_loss.isna()]
+    train_losses = train.train_log_loss.values
+    val_losses = val.val_log_loss.values
 except FileNotFoundError:
     print(f"Metrics file for version {version} not found.")
     train_losses = []
