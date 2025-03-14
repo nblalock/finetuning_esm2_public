@@ -41,92 +41,187 @@ from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 
 # import helper scripts
-from ESM2_w_regression_MLP_heads import (SeqFcnDataset, ProtDataModule, CreiLOVFcnDataset, CreiLOVDataModule, finetuning_ESM2_with_mse_loss)
+from ESM2_w_regression_MLP_heads_CLEAN import (SeqFcnDataset, ProtDataModule, finetuning_ESM2_with_mse_loss)
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 
-# In[3]:
+# In[]
+# Data parameters
+
+data_filepath = 'gb1.tsv' # ! Change this
+df = pd.read_csv(data_filepath, sep='\t')
+WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
+splits_path = None # include if splits stored in a file, else None
+splits_type = "num_mutations" # either "file", "num_mutations", or "cluster"
+
+# In[3]
+
+"""
+Use this cell to import and pre-process your dataset. Following functions assume there is a "sequence" column for the mutated sequences, and a "score" column.
+
+"""
+
+def mutate(np_mutations: list):
+    # 'np_mutations' = list of mutations)
+    
+    list_updated = []
+    count = 0
+    
+    # Iterates over each element of the input array 'np_mutations'
+    for i in range(len(np_mutations)):
+        
+        # splits the element by ',' (comma) to get the individual mutations.
+        try: 
+            muts = np_mutations[i].split(',')
+        except:
+            muts = np_mutations[i]
+            
+        # Go through each mutation (there are one or two)
+        
+       # Creates a copy of the original wild type sequence 'WT_list'
+        mut_list = list(WT)
+        
+        # Iterates over each mutation
+        for mut in muts:
+            
+            # nblalock edit: codes extracts the final index and final amino acid from the mutation string
+            # The code uses slicing and indexing to extract the information regardless of its length
+            final_index = int(mut[1:-1]) - 1
+            final_AA = mut[-1]
+
+            # Replaces the amino acid of the wild type sequence with the mutated amino acid
+            mut_list[final_index] = final_AA
+        
+        # Append mutated sequence and score
+        list_updated.append(mut_list)
+    
+    # Returns the list of updated sequences with mutations
+    return list_updated
+
+
+# Fix indexing in variant/mutation entries. This is only necessary if there are issues with 0 v 1 based indexing
+def convert_indexing(variants, offset: int):
+    """ convert between 0-indexed and 1-indexed """
+    #'variants' = an array of strings representing variants/mutations)
+    # offset = integer
+    
+    converted = [",".join(["{}{}{}".format(mut[0], int(mut[1:-1]) + offset, mut[-1]) for mut in v.split(",")])
+                 for v in variants]
+    # Iterates over each element of the input array 'variants' and for each element
+    # Splits the element by ',' (comma) to get the individual mutations
+    # Uses list comprehension with "join" method to join the mutated elements with a comma,
+    # List comprehension iterates over the individual mutations and for each mutation
+    # The first character of the mutation is taken by mut[0]
+    # Index value is taken by mut[1:-1] and it converts it to an integer, then it adds the offset value to it
+    # the last character of the mutation is taken by mut[-1]
+    # Formats it into a string "{}{}{}"
+    # First {} will be replaced by the first character of the mutation
+    # Second {} will be replaced by the modified index value
+    # Third {} will be replaced by the last character of the mutation.
+    
+    return converted
+# The final list comprehension will have a list of modified mutations with the updated indexing,
+# then it joins each element of the list using ','(comma) and returns the final list of converted variants/mutations.
 
 
 # Choose dataset
-data_filepath = 'normalized_processed_ADA2_R1_dataset.pkl' # ! Change this
-datasplits_filepath = f'{data_filepath}_splits.pkl'
-# dataset_df_for_0thru5_CreiLOV_mutants.pkl # dataset_df_for_subset_0thru1_CreiLOV_mutants.pkl # normalized_procesed_ADA2_R1_dataset.pkl
 
-# load datasets
-df = pd.read_pickle(f"./{data_filepath}").reset_index(drop=True) # load preprocesed CreiLOV data
-df = df.fillna(-1) # Fill NaN values with -1, I will mask these values later
-# df.head()
-# df.columns
+# Sets the number of threads that PyTorch will use for parallel computation.
+torch.set_num_threads(4) 
 
-print(f"Using dataset from {data_filepath} with datasplit from {datasplits_filepath}")
+# The following loads + preprocesses experimentally collected data (fitness scores for gb1 mutants in this example)
+data_filepath = 'gb1.tsv' # ! Change this
+df = pd.read_csv(data_filepath, sep='\t')
+WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
+
+# print(df) # shows thermostability data
+
+################################################ May not be necessary ################################################
+df.variant = convert_indexing(df.variant,1)    
+# print(df) # increases a.a. position by 1
+################################################ May not be necessary ################################################
+
+AA_seq_lists = mutate(list(df['variant'].copy()))
+
+AA_seq_lists2 = [str("".join(AA_seq_lists[j])) for j in range(len(AA_seq_lists))]
+
+# Add column of full amino acid sequences.
+df['Sequence'] = AA_seq_lists2
+
+print(f"Using dataset from {data_filepath}")
+
+df = df.rename(columns={ "Sequence" : "sequence"})
+df['class'] = df['score'].apply(lambda x: 0 if x < 0 else 1) # 0 = "dead", 1 = "functional"
+
+# Plot histogram
+plt.figure(figsize=(10, 6))
+plt.hist(df['score'], bins=50, edgecolor='black', alpha=0.7)
+plt.xlabel('Score')
+plt.ylabel('Frequency')
+plt.title('Histogram of Scores')
+plt.grid(axis='y', alpha=0.75)
+
+# Show plot
+plt.show()
 
 
 # In[4]:
 
 
 # Choose label strategy
-if 'CreiLOV' in data_filepath:
-    reg_target_labels = ['log_mean']  # Define specific reg_target_labels for CreiLOV if needed
-    print(f"Regressing {reg_target_labels}")
-else:
-    # Define reg_target_labels to use
-    reg_target_labels = [
-        # 'Titer (mg/L)',
-        # 'Background A280',
-        'aSEC % Area Main Peak',
-        # 'aSEC % Area HMW',
-        # 'aSEC % Area LMW',
-        # 'DSF Fc Unfold (°C)',
-        # 'DSF ADA Unfold (°C)', 
-        # 'Mean Fold Change'
-        ] # ! update
-    
-    ordinal_reg_target_labels = [
-        # 'aSEC Retention Time (Main Peak)',
-        ] # ! update
-    
-    # Dynamically find reg_target_labels indices
-    reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in reg_target_labels if reg_target_labels in df.columns]
-    ordinal_reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in ordinal_reg_target_labels if reg_target_labels in df.columns]
 
-    # Determine the number of unique variables for ordinal regression labels
-    ordinal_reg_target_nunique = [df[label].nunique() for label in ordinal_reg_target_labels if label in df.columns]
-    
-    labels_to_predict = 'multitask_ADA2_data'  # Use all target reg_target_labels for prediction
-    print(f"Regressing {reg_target_labels} at indices {reg_target_labels_indices}")
-    print(f"Classifying {ordinal_reg_target_labels} at indices {ordinal_reg_target_labels_indices}")
-    print(f"Number of unique variables in ordinal regression labels: {ordinal_reg_target_nunique}")
+# Define reg_target_labels to use
+reg_target_labels = [
+    'score'
+    #'Titer (mg/L)',
+    # 'Background A280',
+    # 'aSEC % Area Main Peak',
+    # 'aSEC % Area HMW',
+    # 'aSEC % Area LMW',
+    # 'DSF Fc Unfold (°C)',
+    # 'DSF ADA Unfold (°C)', 
+    # 'Mean Fold Change'
+    ] # ! update
+
+log_target_labels = [
+    "class"
+] # ! update
+
+ordinal_reg_target_labels = [
+    # 'aSEC Retention Time (Main Peak)',
+    ] # ! update
+
+# Dynamically find reg_target_labels indices
+reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in reg_target_labels if reg_target_labels in df.columns]
+
+log_target_labels_indices = [df.columns.get_loc(log_target_labels) for log_target_labels in log_target_labels if log_target_labels in df.columns]
+
+ordinal_reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in ordinal_reg_target_labels if reg_target_labels in df.columns]
+
+# Determine the number of logistic classes per label
+num_log_classes = [df[label].nunique() for label in log_target_labels if label in df.columns]
+
+# Determine the number of unique variables for ordinal regression labels
+ordinal_reg_target_nunique = [df[label].nunique() for label in ordinal_reg_target_labels if label in df.columns]
 
 
-# In[5]:
-
-
-# Set up Amino Acid Dictionary of Indices
-AAs = 'ACDEFGHIKLMNPQRSTVWY-' # setup torchtext vocab to map AAs to indices
-if 'CreiLOV' in data_filepath:
-    WT = 'MAGLRHTFVVADATLPDCPLVYASEGFYAMTGYGPDEVLGHNARFLQGEGTDPKEVQKIRDAIKKGEACSVRLLNYRKDGTPFWNLLTVTPIKTPDGRVSKFVGVQVDVTSKTEGKALA' # CreiLOV
-else:
-    # ! update
-    WT = "IDETRAHLLLKEKMMRLGGRLVLNTKEELANERLMTLKIAEMKEAMRTLIFPPSMHFFQAKHLIERSQVFNILRMMPKGAALHLHDIGIVTMDWLVRNVTYRPHCHICFTPRGIMQFRFAHPTPRPSEKCSKWILLEDYRKRVQNVTEFDDSLLRNFTLVTQHPEVIYTNQNVVWSKFETIFFTISGLIHYAPVFRDYVFRSMQEFYEDNVLYMEIRARLLPVYELSGEHHDEEWSVKTYQEVAQKFVETHPEFIGIKIIYSDHRSKDVAVIAESIRMAMGLRIKFPTVVAGFDLVGHEDTGHSLHDYKEALMIPAKDGVKLPYFFHAGETDWQGTSIDRNILDALMLNTTRIGHGFALSKHPAVRTYSWKKDIPIEVCPISNQVLKLVSDLRNHPVATLMATGHPMVISSDDPAMFGAKGLSYDFYEVFMGIGGMKADLRTLKQLAMNSIKYSTLLESEKNTFMEIWKKRWDKFIADVATK" # ! ADA2
-aa2ind = vocab.vocab(OrderedDict([(a, 1) for a in AAs]))
-aa2ind.set_default_index(20) # set unknown charcterers to gap
-ind2aa = {aa2ind[a]: a for a in AAs} # Create a reverse mapping for indices to amino acids
+print(f"Regressing {reg_target_labels} at indices {reg_target_labels_indices}")
+print(f"Classifying {log_target_labels} at indices {log_target_labels_indices}")
+print(f"Ordinally regressing {ordinal_reg_target_labels} at indices {ordinal_reg_target_labels_indices}")
+print(f"Number of unique variables in ordinal regression labels: {ordinal_reg_target_nunique}")
 
 
 # In[6]:
-
-
 ######################################## Hyperparameters that can be altered ########################################
 # ESM2 selection
-huggingface_identifier ='esm2_t30_150M_UR50D' # esm2_t6_8M_UR50D # esm2_t12_35M_UR50D # esm2_t30_150M_UR50D # esm2_t33_650M_UR50D
+huggingface_identifier ='esm2_t6_8M_UR50D' # esm2_t6_8M_UR50D # esm2_t12_35M_UR50D # esm2_t30_150M_UR50D # esm2_t33_650M_UR50D
 ESM2 = AutoModelForMaskedLM.from_pretrained(f"facebook/{huggingface_identifier}")
 tokenizer = AutoTokenizer.from_pretrained(f"facebook/{huggingface_identifier}")
 model_identifier = huggingface_identifier
 token_format = 'ESM2'
 
 # Model training hyperparameters
-num_unfrozen_layers = 27
+num_unfrozen_layers = 0
 num_layers_unfreeze_each_epoch = 15
 max_num_layers_unfreeze_each_epoch = 36
 epoch_threshold_to_unlock_ESM2 = 100
@@ -134,8 +229,8 @@ hidden_layer_size_1 = 300 # ! update
 hidden_layer_size_2 = 5 # ! update
 
 # Learning hyperparameters
-epochs = 4000 # ! update
-patience = 600 # ! update
+epochs = 50 # ! update
+patience = 10 # ! update
 warm_restart = 1 # with warm restart
 use_scheduler = 1 # with scheduler
 WD = 0.005
@@ -152,7 +247,7 @@ decay = 0.8
 embedding_type = 'all_tokens' # 'all_tokens' # ! Change this
 if embedding_type == 'cls_token_only':
     batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
-elif embedding_type == 'mean_pooling':
+elif embedding_type == 'mean_pooling' or embedding_type == 'max_pooling':
     batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
 elif embedding_type == 'all_tokens':
     batch_size = 16
@@ -163,10 +258,11 @@ else:
 slen = len(WT) # length of protein
 num_reg_tasks = 1 # len(reg_target_labels)
 reg_weights = [1] # ! update
-reg_type = 'mse'
+num_log_tasks = len(log_target_labels)
+reg_type = ["log"] # ["mse", "log", "ord"] include any of the 3 based on task
 num_ord_reg_tasks = 0 # len(ordinal_reg_target_labels)
 ord_reg_weights = [] # ! update
-ord_reg_type = 'corn_loss'
+ord_reg_type = "corn_loss"
 
 filepath = f'finetuning_ESM2_with_{data_filepath}'
 
@@ -199,16 +295,8 @@ else:
 
 # In[7]:
 
-
-# Training Models
-if 'CreiLOV' in data_filepath:
-    # dm = CreiLOVDataModule(df, batch_size) # dm an instance of the clas defined above, see notes above for its purpose
-    # dm.save_splits(datasplits_filepath)
-    dm = CreiLOVDataModule(df, batch_size, datasplits_filepath, token_format, seed) # Use same splits for each model
-else:
-    # dm = ProtDataModule(df, reg_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, None, token_format, seed) # dm an instance of the clas defined above, see notes above for its purpose
-    # dm.save_splits(datasplits_filepath)
-    dm = ProtDataModule(df, reg_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, datasplits_filepath, token_format, seed) # Use same splits for each model
+# Data Module
+dm = ProtDataModule(df, reg_target_labels_indices, log_target_labels_indices, ordinal_reg_target_labels_indices, batch_size, splits_path, splits_type, token_format, seed)
 
 
 # In[8]:
@@ -217,7 +305,7 @@ model = finetuning_ESM2_with_mse_loss(ESM2, huggingface_identifier, tokenizer, n
                  epochs, batch_size, seed, embedding_type, patience,
                  learning_rate, lr_mult, lr_mult_factor,
                  WD, reinit_optimizer, grad_clip_threshold, use_scheduler, warm_restart,
-                 slen, num_reg_tasks, reg_weights, reg_type, num_ord_reg_tasks, ord_reg_weights, ord_reg_type, ordinal_reg_target_nunique,
+                 slen, num_reg_tasks, num_log_classes, num_log_tasks, reg_weights, reg_type, num_ord_reg_tasks, ord_reg_weights, None, ordinal_reg_target_nunique,
                  using_EMA, decay,
                  epoch_threshold_to_unlock_ESM2,
                  WT,
@@ -226,10 +314,10 @@ model = finetuning_ESM2_with_mse_loss(ESM2, huggingface_identifier, tokenizer, n
 checkpoint_callback = ModelCheckpoint(
         dirpath=f"./logs/{filepath}/",
         filename=f"{filepath}",
-        monitor="val_reg_loss",
+        monitor="val_log_loss",
         mode="min",
         save_top_k=1)
-early_stopping = EarlyStopping(monitor="val_reg_loss", patience=patience, mode="min")
+early_stopping = EarlyStopping(monitor="val_log_loss", patience=patience, mode="min")
 logger = CSVLogger('logs', name=f"{filepath}") # logger is a class instance that stores performance data to a csv after each epoch
 
 # Dynamically set up Trainer based on available device
@@ -239,21 +327,21 @@ trainer = pl.Trainer(
     callbacks=[checkpoint_callback, early_stopping],
     enable_progress_bar=True,
     accelerator=device,  # Automatically chooses between "cpu" and "gpu"
-    devices=1 if device == "cuda" else None,  # Use 1 GPU if available, else default to CPU
+    devices=1 if device == "cuda" else "auto",  # Use 1 GPU if available, else default to CPU
     deterministic=True  # Ensure reproducibility
 )
-try:
-    trainer.fit(model, dm)
-except Exception as e:
-    print(f"Training stopped due to an error: {e}")
+#try:
+trainer.fit(model, dm)
+#except Exception as e:
+ #   print(f"Training stopped due to an error: {e}")
 
 
 # In[9]:
 
 
 # Save the model
-non_ema_path = f'./logs/{filepath}/version_{logger.version}/multitask_ESM2.pt'
-ema_path = f'./logs/{filepath}/version_{logger.version}/multitask_ESM2_w_EMA.pt'
+non_ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2_Log_Testing.pt'
+ema_path = f'./logs/{filepath}/version_{logger.version}/ESM2__Log_Testing_w_EMA.pt'
 model.save_model(non_ema_path, ema_path)
 
 
@@ -273,10 +361,10 @@ try:
     pt_metrics = pd.read_csv(f'./logs/{filepath}/version_{version}/metrics.csv')
     
     # Extract training and validation losses
-    train = pt_metrics[~pt_metrics.train_reg_loss.isna()]
-    val = pt_metrics[~pt_metrics.val_reg_loss.isna()]
-    train_losses = train.train_reg_loss.values
-    val_losses = val.val_reg_loss.values
+    train = pt_metrics[~pt_metrics.train_log_loss.isna()]
+    val = pt_metrics[~pt_metrics.val_log_loss.isna()]
+    train_losses = train.train_log_loss.values
+    val_losses = val.val_log_loss.values
 except FileNotFoundError:
     print(f"Metrics file for version {version} not found.")
     train_losses = []
