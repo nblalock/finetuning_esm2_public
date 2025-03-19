@@ -508,7 +508,7 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 
                 log_observations = torch.sum(log_mask)  # Number of valid labels
                 log_loss = torch.div(torch.sum(torch.nan_to_num(log_loss, nan=0.0, posinf=0.0, neginf=0.0)), log_observations)
-                log_loss /= self.num_log_classes
+                log_loss /= self.num_log_classes[0]
             if log_observations == 0.0:
                     log_loss = torch.tensor(0.0, device=self.device)
         
@@ -622,6 +622,7 @@ class finetuning_ESM2_with_mse_loss(pl.LightningModule):
                 
                 log_observations = torch.sum(log_mask)  # Number of valid labels
                 log_loss = torch.div(torch.sum(torch.nan_to_num(log_loss, nan=0.0, posinf=0.0, neginf=0.0)), log_observations)
+                log_loss /= self.num_log_classes[0]
             if log_observations == 0.0:
                     log_loss = torch.tensor(0.0, device=self.device)
         

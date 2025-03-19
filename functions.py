@@ -5,7 +5,6 @@ with warnings.catch_warnings():
 import numpy as np
 import pandas as pd
 import pickle
-from Bio import AlignIO
 import math
 import argparse
 from argparse import ArgumentParser
@@ -25,7 +24,6 @@ import pathlib
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.pyplot as plt
 import seaborn as sns
-from Bio import SeqIO
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 from pathlib import Path
 import re
@@ -656,6 +654,64 @@ def generate_random_variants(sequence, mutations):
     return ''.join(variant)
 
 
+def mutate(np_mutations: list, WT: str):
+    # 'np_mutations' = list of mutations)
+    
+    list_updated = []
+    count = 0
+    
+    # Iterates over each element of the input array 'np_mutations'
+    for i in range(len(np_mutations)):
+        
+        # splits the element by ',' (comma) to get the individual mutations.
+        try: 
+            muts = np_mutations[i].split(',')
+        except:
+            muts = np_mutations[i]
+            
+        # Go through each mutation (there are one or two)
+        
+       # Creates a copy of the original wild type sequence 'WT_list'
+        mut_list = list(WT)
+        
+        # Iterates over each mutation
+        for mut in muts:
+            
+            # nblalock edit: codes extracts the final index and final amino acid from the mutation string
+            # The code uses slicing and indexing to extract the information regardless of its length
+            final_index = int(mut[1:-1]) - 1
+            final_AA = mut[-1]
 
+            # Replaces the amino acid of the wild type sequence with the mutated amino acid
+            mut_list[final_index] = final_AA
+        
+        # Append mutated sequence and score
+        list_updated.append(mut_list)
+    
+    # Returns the list of updated sequences with mutations
+    return list_updated
+
+
+# Fix indexing in variant/mutation entries. This is only necessary if there are issues with 0 v 1 based indexing
+def convert_indexing(variants, offset: int):
+    """ convert between 0-indexed and 1-indexed """
+    #'variants' = an array of strings representing variants/mutations)
+    # offset = integer
+    
+    converted = [",".join(["{}{}{}".format(mut[0], int(mut[1:-1]) + offset, mut[-1]) for mut in v.split(",")])
+                 for v in variants]
+    # Iterates over each element of the input array 'variants' and for each element
+    # Splits the element by ',' (comma) to get the individual mutations
+    # Uses list comprehension with "join" method to join the mutated elements with a comma,
+    # List comprehension iterates over the individual mutations and for each mutation
+    # The first character of the mutation is taken by mut[0]
+    # Index value is taken by mut[1:-1] and it converts it to an integer, then it adds the offset value to it
+    # the last character of the mutation is taken by mut[-1]
+    # Formats it into a string "{}{}{}"
+    # First {} will be replaced by the first character of the mutation
+    # Second {} will be replaced by the modified index value
+    # Third {} will be replaced by the last character of the mutation.
+    
+    return converted
 
 

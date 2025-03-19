@@ -37,111 +37,39 @@ from coral_pytorch.dataset import corn_label_from_logits
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 
+
 # In[2]:
 
-
 # import helper scripts
-from ESM2_w_regression_MLP_heads_CLEAN import (SeqFcnDataset, ProtDataModule, finetuning_ESM2_with_mse_loss)
+from ESM2_w_regression_MLP_heads import (SeqFcnDataset, ProtDataModule, finetuning_ESM2_with_mse_loss)
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
+from functions import convert_indexing, mutate
 
 # In[]
 # Data parameters
 
-data_filepath = 'gb1.tsv' # ! Change this
+data_filepath = 'datasets/gb1.tsv' # ! Change this
 df = pd.read_csv(data_filepath, sep='\t')
-WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
+WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE" # ! update
 splits_path = None # include if splits stored in a file, else None
 splits_type = "num_mutations" # either "file", "num_mutations", or "cluster"
+
+# Define target labels to use
+reg_target_labels = ['score'] # Pass in the column(s) of your dataset you want to perform MSE regression on. This will typically be a "score" column. Can be left empty
+
+log_target_labels = ['class'] # Pass in the column(s) of your dataset you want to perform logistic classification on. This will typically be a "class" column. Can be left empty if no classification desired
+
+ordinal_reg_target_labels = [] # Same as above arrays, but for ordinal regression. Can be left empty
 
 # In[3]
 
 """
-Use this cell to import and pre-process your dataset. Following functions assume there is a "sequence" column for the mutated sequences, and a "score" column.
+Use this cell to import and pre-process your dataset. This whole cell should vary based on which data you use. Below is an example of preprocessing the GB1 dataset
 
 """
-
-def mutate(np_mutations: list):
-    # 'np_mutations' = list of mutations)
-    
-    list_updated = []
-    count = 0
-    
-    # Iterates over each element of the input array 'np_mutations'
-    for i in range(len(np_mutations)):
-        
-        # splits the element by ',' (comma) to get the individual mutations.
-        try: 
-            muts = np_mutations[i].split(',')
-        except:
-            muts = np_mutations[i]
-            
-        # Go through each mutation (there are one or two)
-        
-       # Creates a copy of the original wild type sequence 'WT_list'
-        mut_list = list(WT)
-        
-        # Iterates over each mutation
-        for mut in muts:
-            
-            # nblalock edit: codes extracts the final index and final amino acid from the mutation string
-            # The code uses slicing and indexing to extract the information regardless of its length
-            final_index = int(mut[1:-1]) - 1
-            final_AA = mut[-1]
-
-            # Replaces the amino acid of the wild type sequence with the mutated amino acid
-            mut_list[final_index] = final_AA
-        
-        # Append mutated sequence and score
-        list_updated.append(mut_list)
-    
-    # Returns the list of updated sequences with mutations
-    return list_updated
-
-
-# Fix indexing in variant/mutation entries. This is only necessary if there are issues with 0 v 1 based indexing
-def convert_indexing(variants, offset: int):
-    """ convert between 0-indexed and 1-indexed """
-    #'variants' = an array of strings representing variants/mutations)
-    # offset = integer
-    
-    converted = [",".join(["{}{}{}".format(mut[0], int(mut[1:-1]) + offset, mut[-1]) for mut in v.split(",")])
-                 for v in variants]
-    # Iterates over each element of the input array 'variants' and for each element
-    # Splits the element by ',' (comma) to get the individual mutations
-    # Uses list comprehension with "join" method to join the mutated elements with a comma,
-    # List comprehension iterates over the individual mutations and for each mutation
-    # The first character of the mutation is taken by mut[0]
-    # Index value is taken by mut[1:-1] and it converts it to an integer, then it adds the offset value to it
-    # the last character of the mutation is taken by mut[-1]
-    # Formats it into a string "{}{}{}"
-    # First {} will be replaced by the first character of the mutation
-    # Second {} will be replaced by the modified index value
-    # Third {} will be replaced by the last character of the mutation.
-    
-    return converted
-# The final list comprehension will have a list of modified mutations with the updated indexing,
-# then it joins each element of the list using ','(comma) and returns the final list of converted variants/mutations.
-
-
-# Choose dataset
-
-# Sets the number of threads that PyTorch will use for parallel computation.
 torch.set_num_threads(4) 
-
-# The following loads + preprocesses experimentally collected data (fitness scores for gb1 mutants in this example)
-data_filepath = 'gb1.tsv' # ! Change this
-df = pd.read_csv(data_filepath, sep='\t')
-WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
-
-# print(df) # shows thermostability data
-
-################################################ May not be necessary ################################################
 df.variant = convert_indexing(df.variant,1)    
-# print(df) # increases a.a. position by 1
-################################################ May not be necessary ################################################
-
-AA_seq_lists = mutate(list(df['variant'].copy()))
+AA_seq_lists = mutate(list(df['variant'].copy()), WT)
 
 AA_seq_lists2 = [str("".join(AA_seq_lists[j])) for j in range(len(AA_seq_lists))]
 
@@ -166,31 +94,6 @@ plt.show()
 
 
 # In[4]:
-
-
-# Choose label strategy
-
-# Define reg_target_labels to use
-reg_target_labels = [
-    'score'
-    #'Titer (mg/L)',
-    # 'Background A280',
-    # 'aSEC % Area Main Peak',
-    # 'aSEC % Area HMW',
-    # 'aSEC % Area LMW',
-    # 'DSF Fc Unfold (°C)',
-    # 'DSF ADA Unfold (°C)', 
-    # 'Mean Fold Change'
-    ] # ! update
-
-log_target_labels = [
-    "class"
-] # ! update
-
-ordinal_reg_target_labels = [
-    # 'aSEC Retention Time (Main Peak)',
-    ] # ! update
-
 # Dynamically find reg_target_labels indices
 reg_target_labels_indices = [df.columns.get_loc(reg_target_labels) for reg_target_labels in reg_target_labels if reg_target_labels in df.columns]
 
@@ -259,7 +162,7 @@ slen = len(WT) # length of protein
 num_reg_tasks = 1 # len(reg_target_labels)
 reg_weights = [1] # ! update
 num_log_tasks = len(log_target_labels)
-reg_type = ["log"] # ["mse", "log", "ord"] include any of the 3 based on task
+reg_type = ["mse", "log"] # ["mse", "log", "ord"] include any of the 3 based on task
 num_ord_reg_tasks = 0 # len(ordinal_reg_target_labels)
 ord_reg_weights = [] # ! update
 ord_reg_type = "corn_loss"
