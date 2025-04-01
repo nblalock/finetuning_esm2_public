@@ -46,7 +46,7 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from functions import convert_indexing, mutate
 
 # In[]
-# Data parameters
+######################################## Dataset hyperparameters that can be altered ########################################
 
 data_filepath = 'datasets/gb1.tsv' # ! Change this
 df = pd.read_csv(data_filepath, sep='\t')
@@ -54,12 +54,69 @@ WT = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE" # ! update
 splits_path = None # include if splits stored in a file, else None
 splits_type = "num_mutations" # either "file", "num_mutations", or "cluster"
 
+
 # Define target labels to use
 reg_target_labels = ['score'] # Pass in the column(s) of your dataset you want to perform MSE regression on. This will typically be a "score" column. Can be left empty
 
 log_target_labels = ['class'] # Pass in the column(s) of your dataset you want to perform logistic classification on. This will typically be a "class" column. Can be left empty if no classification desired
 
 ordinal_reg_target_labels = [] # Same as above arrays, but for ordinal regression. Can be left empty
+
+reg_type = ["mse", "log"] # ["mse", "log", "ord"] include any combination of the 3 based on task
+
+
+slen = len(WT) # length of protein
+num_reg_tasks = len(reg_target_labels)
+reg_weights = [1] # ! update
+num_log_tasks = len(log_target_labels)
+num_ord_reg_tasks = len(ordinal_reg_target_labels)
+ord_reg_weights = [] # ! update
+ord_reg_type = "corn_loss"
+
+# In[]:
+######################################## ESM2 Hyperparameters that can be altered ########################################
+# ESM2 selection
+huggingface_identifier ='esm2_t6_8M_UR50D' # esm2_t6_8M_UR50D # esm2_t12_35M_UR50D # esm2_t30_150M_UR50D # esm2_t33_650M_UR50D
+ESM2 = AutoModelForMaskedLM.from_pretrained(f"facebook/{huggingface_identifier}")
+tokenizer = AutoTokenizer.from_pretrained(f"facebook/{huggingface_identifier}")
+model_identifier = huggingface_identifier
+token_format = 'ESM2'
+
+# Model training hyperparameters
+num_unfrozen_layers = 0
+num_layers_unfreeze_each_epoch = 15
+max_num_layers_unfreeze_each_epoch = 36
+epoch_threshold_to_unlock_ESM2 = 100
+hidden_layer_size_1 = 300 # ! update
+hidden_layer_size_2 = 5 # ! update
+
+# Learning hyperparameters
+epochs = 50 # ! update
+patience = 10 # ! update
+warm_restart = 1 # with warm restart
+use_scheduler = 1 # with scheduler
+WD = 0.005
+grad_clip_threshold = 3.0
+lr_mult = 1
+lr_mult_factor = 1
+seed = 3
+learning_rate = 1e-6 # ! update
+reinit_optimizer = 0
+using_EMA = 1
+decay = 0.8
+
+# GPU hyperparameters
+embedding_type = 'all_tokens' # 'all_tokens' # ! Change this
+if embedding_type == 'cls_token_only':
+    batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
+elif embedding_type == 'mean_pooling' or embedding_type == 'max_pooling':
+    batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
+elif embedding_type == 'all_tokens':
+    batch_size = 16
+else:
+    print('Isue selecting embedding type')
+
+
 
 # In[3]
 
@@ -115,58 +172,6 @@ print(f"Number of unique variables in ordinal regression labels: {ordinal_reg_ta
 
 
 # In[6]:
-######################################## Hyperparameters that can be altered ########################################
-# ESM2 selection
-huggingface_identifier ='esm2_t6_8M_UR50D' # esm2_t6_8M_UR50D # esm2_t12_35M_UR50D # esm2_t30_150M_UR50D # esm2_t33_650M_UR50D
-ESM2 = AutoModelForMaskedLM.from_pretrained(f"facebook/{huggingface_identifier}")
-tokenizer = AutoTokenizer.from_pretrained(f"facebook/{huggingface_identifier}")
-model_identifier = huggingface_identifier
-token_format = 'ESM2'
-
-# Model training hyperparameters
-num_unfrozen_layers = 0
-num_layers_unfreeze_each_epoch = 15
-max_num_layers_unfreeze_each_epoch = 36
-epoch_threshold_to_unlock_ESM2 = 100
-hidden_layer_size_1 = 300 # ! update
-hidden_layer_size_2 = 5 # ! update
-
-# Learning hyperparameters
-epochs = 50 # ! update
-patience = 10 # ! update
-warm_restart = 1 # with warm restart
-use_scheduler = 1 # with scheduler
-WD = 0.005
-grad_clip_threshold = 3.0
-lr_mult = 1
-lr_mult_factor = 1
-seed = 3
-learning_rate = 1e-6 # ! update
-reinit_optimizer = 0
-using_EMA = 1
-decay = 0.8
-
-# GPU hyperparameters
-embedding_type = 'all_tokens' # 'all_tokens' # ! Change this
-if embedding_type == 'cls_token_only':
-    batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
-elif embedding_type == 'mean_pooling' or embedding_type == 'max_pooling':
-    batch_size = 32 # typically powers of 2: 32, 64, 128, 256, ...
-elif embedding_type == 'all_tokens':
-    batch_size = 16
-else:
-    print('Isue selecting embedding type')
-
-# Data hyperparameters
-slen = len(WT) # length of protein
-num_reg_tasks = 1 # len(reg_target_labels)
-reg_weights = [1] # ! update
-num_log_tasks = len(log_target_labels)
-reg_type = ["mse", "log"] # ["mse", "log", "ord"] include any of the 3 based on task
-num_ord_reg_tasks = 0 # len(ordinal_reg_target_labels)
-ord_reg_weights = [] # ! update
-ord_reg_type = "corn_loss"
-
 filepath = f'finetuning_ESM2_with_{data_filepath}'
 
 # Determine if we're running on a GPU
